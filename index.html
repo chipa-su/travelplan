@@ -166,6 +166,16 @@ aside{
 .day-head.wknd .ddate{color:#3B5B85}
 .day-head .dnum{font-family:var(--mono);font-size:15px;font-weight:700;letter-spacing:1px}
 .day-head .ddate{font-family:var(--mono);font-size:11.5px;color:#9DB1D2}
+.day-head .dmap{
+  margin-left:auto;border:none;border-radius:6px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:3px;padding:3px 7px;
+  background:rgba(255,255,255,.92);color:var(--ink);
+  font-family:var(--sans);font-size:10.5px;font-weight:700;line-height:1;
+}
+.day-head .dmap svg{width:12px;height:12px;display:block}
+.day-head .dmap:hover{background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25)}
+.day-head.wknd .dmap{background:#fff;border:1px solid var(--line)}
+.day-head.wknd .dmap:hover{box-shadow:0 1px 4px rgba(23,35,59,.2)}
 .slot{padding:8px 10px 12px;border-top:1px dashed var(--line);min-height:88px;transition:background .15s}
 .slot:first-of-type{border-top:none}
 .slot.dragover{background:var(--accent-soft)}
@@ -789,8 +799,11 @@ function render(){
           day[s].length ? day[s].map(id=>chipHTML(id,"board")).join("") : `<div class="empty-hint">拖曳事件到這裡</div>`
         }</div>
       </div>`).join("");
+    const hasEv = SLOTS.some(s=>day[s].length);
     return `<div class="day">
-      <div class="day-head${isWknd(d)?" wknd":""}"><span class="dnum">DAY ${i+1}</span><span class="ddate">${d?fmtDate(d):""}</span></div>
+      <div class="day-head${isWknd(d)?" wknd":""}"><span class="dnum">DAY ${i+1}</span><span class="ddate">${d?fmtDate(d):""}</span>${
+        hasEv ? `<button class="dmap" data-day="${i}" title="在 Google Maps 開啟當日路線（依早→中→晚順序）">${PIN_SVG}<span>地圖</span></button>` : ""
+      }</div>
       ${slots}
     </div>`;
   }).join("");
@@ -1188,6 +1201,44 @@ $("btnExport").addEventListener("click", ()=>{
   XLSX.utils.book_append_sheet(wb, cfg, "設定");
   XLSX.writeFile(wb, safeName(el.title.value) + ".xlsx");
   toast("已匯出，之後可用「匯入行程」整份還原");
+});
+
+/* ───────────────────── 當日地圖路線 ───────────────────── */
+function coordsFromUrl(u){
+  if(!u) return null;
+  let m = u.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);   /* 地點精準座標 */
+  if(m) return m[1] + "," + m[2];
+  m = u.match(/[?&]q(?:uery)?=(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if(m) return m[1] + "," + m[2];
+  m = u.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);            /* 視窗中心，次佳 */
+  if(m) return m[1] + "," + m[2];
+  return null;
+}
+function waypointOf(id){
+  const ev = events.get(id);
+  return coordsFromUrl(ev.g) || [ev.n, ev.a].filter(Boolean).join(" ");
+}
+document.addEventListener("click", e=>{
+  const btn = e.target.closest(".dmap");
+  if(!btn) return;
+  const day = state.days[+btn.dataset.day];
+  let ids = [];
+  SLOTS.forEach(s=>ids.push(...day[s]));
+  if(!ids.length) return;
+  if(ids.length === 1){
+    window.open("https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(waypointOf(ids[0])), "_blank");
+    return;
+  }
+  if(ids.length > 11){
+    toast(`Google Maps 路線最多 11 個點，已取當日前 11 個（共 ${ids.length} 個）`);
+    ids = ids.slice(0, 11);
+  }
+  const pts = ids.map(waypointOf);
+  const url = "https://www.google.com/maps/dir/?api=1"
+    + "&origin=" + encodeURIComponent(pts[0])
+    + "&destination=" + encodeURIComponent(pts[pts.length-1])
+    + (pts.length > 2 ? "&waypoints=" + pts.slice(1,-1).map(encodeURIComponent).join("%7C") : "");
+  window.open(url, "_blank");
 });
 
 /* ───────────────────── 列印 ───────────────────── */
