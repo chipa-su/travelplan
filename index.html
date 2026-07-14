@@ -1305,9 +1305,14 @@ $("mmKML").addEventListener("click", ()=>{
     groups.get(k).push(r);
   });
   const usedDays = [...groups.keys()].filter(k=>k!=="pool").sort((a,b)=>a-b);
-  /* 樣式依「類別」上色，對應畫面上的七分類色 */
+  /* 樣式依「類別」上色。My Maps 只還原「自家匯出格式」的顏色：
+     必須用 gstatic 的 503-wht-blank 圖示 + normal/highlight StyleMap 結構 */
+  const MM_ICON = "https://www.gstatic.com/mapspro/images/stock/503-wht-blank_maps.png";
   CAT_ORDER.forEach(c=>{
-    styles += `<Style id="c_${c}"><IconStyle><color>${kmlColor(CAT_COLOR[c])}</color><Icon><href>https://maps.google.com/mapfiles/kml/paddle/wht-blank.png</href></Icon></IconStyle></Style>`;
+    const col = kmlColor(CAT_COLOR[c]);
+    styles += `<Style id="c_${c}-normal"><IconStyle><color>${col}</color><scale>1</scale><Icon><href>${MM_ICON}</href></Icon></IconStyle><LabelStyle><scale>0</scale></LabelStyle></Style>` +
+      `<Style id="c_${c}-highlight"><IconStyle><color>${col}</color><scale>1.2</scale><Icon><href>${MM_ICON}</href></Icon></IconStyle><LabelStyle><scale>1</scale></LabelStyle></Style>` +
+      `<StyleMap id="c_${c}"><Pair><key>normal</key><styleUrl>#c_${c}-normal</styleUrl></Pair><Pair><key>highlight</key><styleUrl>#c_${c}-highlight</styleUrl></Pair></StyleMap>`;
   });
   const mkPm = (r)=>{
     const [la, ln] = r.coord.split(",");
