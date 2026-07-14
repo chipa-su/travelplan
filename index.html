@@ -455,7 +455,7 @@ dialog.wide{max-width:880px}
     <div class="field"><label>城市（選填，協助「無座標」的點自動定位，例：London）</label>
       <input id="mmCity" maxlength="30" placeholder="London"></div>
     <p style="font-size:12px;color:var(--ink-soft);line-height:1.8">
-      <b>KML（推薦）</b>：只含有座標的點，名稱、依天分色、分組全部自動，匯入零設定。<br>
+      <b>KML（推薦）</b>：只含有座標的點，名稱＝卡片名稱、圖示＝分類顏色、依天分資料夾，匯入零設定。<br>
       <b>CSV</b>：包含全部的點，無座標者由 My Maps 用名稱自動定位（連鎖店請務必驗證）；
       匯入時位置欄選「<b>定位</b>」、名稱欄選「<b>名稱</b>」。</p>
   </div>
@@ -1273,18 +1273,21 @@ $("btnMyMaps").addEventListener("click", ()=>{
   $("mmDlg").showModal();
 });
 $("mmClose").addEventListener("click", ()=>$("mmDlg").close());
-function csvCell(v){ return '"' + String(v??"").replace(/"/g,'""') + '"'; }
+function csvCell(v){
+  const t = String(v??"");
+  return /[",\r\n]/.test(t) ? '"' + t.replace(/"/g,'""') + '"' : t;
+}
 $("mmCSV").addEventListener("click", ()=>{
   const city = $("mmCity").value.trim();
   const rows = allEventRows();
-  const head = ["名稱","定位","天","時段","類別","區域","備註","定位方式"];
+  const head = "名稱,定位,天,時段,類別,區域,備註,定位方式";   /* 標題列不加引號，My Maps 對欄名字元很嚴格 */
   const body = rows.map(r=>{
     const loc = r.coord || [r.ev.n, r.ev.a, city].filter(Boolean).join(" ");
     return [r.ev.n, loc, r.day, r.slot, CATS[r.ev.c].label, r.ev.a, r.ev.m,
       r.coord ? "精準座標" : "自動定位・請驗證"].map(csvCell).join(",");
   });
   dlFile(safeName(el.title.value) + "_MyMaps.csv", "text/csv;charset=utf-8",
-    "\ufeff" + head.map(csvCell).join(",") + "\r\n" + body.join("\r\n"));
+    "\ufeff" + head + "\r\n" + body.join("\r\n"));
   toast("已下載 CSV，到 My Maps 匯入：位置欄選「定位」、名稱欄選「名稱」");
 });
 function xmlEsc(v){ return String(v??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
@@ -1302,24 +1305,31 @@ $("mmKML").addEventListener("click", ()=>{
     groups.get(k).push(r);
   });
   const usedDays = [...groups.keys()].filter(k=>k!=="pool").sort((a,b)=>a-b);
-  usedDays.forEach(dn=>{
-    styles += `<Style id="d${dn}"><IconStyle><color>${kmlColor(DAY_PALETTE[(dn-1)%DAY_PALETTE.length])}</color><Icon><href>https://maps.google.com/mapfiles/kml/paddle/wht-blank.png</href></Icon></IconStyle></Style>`;
+  /* 樣式依「類別」上色，對應畫面上的七分類色 */
+  CAT_ORDER.forEach(c=>{
+    styles += `<Style id="c_${c}"><IconStyle><color>${kmlColor(CAT_COLOR[c])}</color><Icon><href>https://maps.google.com/mapfiles/kml/paddle/wht-blank.png</href></Icon></IconStyle></Style>`;
   });
-  styles += `<Style id="dpool"><IconStyle><color>${kmlColor("#5C677D")}</color><Icon><href>https://maps.google.com/mapfiles/kml/paddle/wht-blank.png</href></Icon></IconStyle></Style>`;
-  const mkPm = (r, sid)=>{
+  const mkPm = (r)=>{
     const [la, ln] = r.coord.split(",");
     const desc = [CATS[r.ev.c].label, r.ev.a, r.ev.m, r.slot ? "時段：" + r.slot : ""].filter(Boolean).join("｜");
-    return `<Placemark><name>${xmlEsc(r.ev.n)}</name><styleUrl>#${sid}</styleUrl>` +
-      (desc ? `<description>${xmlEsc(desc)}</description>` : "") +
+    const xd = `<ExtendedData>` +
+      `<Data name="類別"><value>${xmlEsc(CATS[r.ev.c].label)}</value></Data>` +
+      `<Data name="天"><value>${r.day||""}</value></Data>` +
+      `<Data name="時段"><value>${xmlEsc(r.slot||"")}</value></Data>` +
+      `<Data name="區域"><value>${xmlEsc(r.ev.a||"")}</value></Data>` +
+      `<Data name="備註"><value>${xmlEsc(r.ev.m||"")}</value></Data>` +
+      `</ExtendedData>`;
+    return `<Placemark><name>${xmlEsc(r.ev.n)}</name><styleUrl>#c_${r.ev.c}</styleUrl>` +
+      (desc ? `<description>${xmlEsc(desc)}</description>` : "") + xd +
       `<Point><coordinates>${ln},${la},0</coordinates></Point></Placemark>`;
   };
   usedDays.forEach(dn=>{
     const d = dateOf(dn-1);
     folders += `<Folder><name>DAY ${dn}${d ? "（" + fmtDate(d) + "）" : ""}</name>` +
-      groups.get(dn).map(r=>mkPm(r, "d"+dn)).join("") + `</Folder>`;
+      groups.get(dn).map(mkPm).join("") + `</Folder>`;
   });
   if(groups.has("pool")){
-    folders += `<Folder><name>未排入</name>` + groups.get("pool").map(r=>mkPm(r, "dpool")).join("") + `</Folder>`;
+    folders += `<Folder><name>未排入</name>` + groups.get("pool").map(mkPm).join("") + `</Folder>`;
   }
   const kml = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${title}</name>${styles}${folders}</Document></kml>`;
   dlFile(safeName(el.title.value) + ".kml", "application/vnd.google-earth.kml+xml", kml);
