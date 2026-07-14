@@ -7,6 +7,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
 :root{
   --bg:#EDF0F6;
@@ -238,6 +240,17 @@ dialog::backdrop{background:rgba(23,35,59,.45)}
 .field.invalid input{border-color:#C92A2A}
 .field.invalid .err{display:block}
 
+dialog.wide{max-width:880px}
+#mapBox{height:60vh;min-height:320px;border-radius:8px;border:1px solid var(--line);background:#EAEDF2}
+.mpin{
+  width:26px;height:26px;border-radius:50% 50% 50% 4px;transform:rotate(0deg);
+  color:#fff;font-weight:800;font-size:12px;font-family:var(--mono);
+  display:flex;align-items:center;justify-content:center;
+  border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);
+}
+#mapMiss{font-size:12px;color:#C92A2A;margin-top:8px;line-height:1.7}
+#mapHint{font-size:11.5px;color:var(--ink-soft);margin-top:4px}
+
 /* toast */
 #toast{
   position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);
@@ -322,6 +335,7 @@ dialog::backdrop{background:rgba(23,35,59,.45)}
     <button class="btn" id="btnTemplate">下載樣板</button>
     <button class="btn" id="btnImportTrip">匯入行程</button>
     <button class="btn" id="btnExport">匯出行程</button>
+    <button class="btn" id="btnMyMaps">匯出 My Maps</button>
     <button class="btn" id="btnShare">🔗 分享連結</button>
     <button class="btn" id="btnPrint">🖨 列印行程</button>
   </div>
@@ -432,6 +446,37 @@ dialog::backdrop{background:rgba(23,35,59,.45)}
     <div id="qrMsg" style="font-size:12px;color:#C92A2A;text-align:center;margin-top:6px"></div>
   </div>
   <div class="dlg-foot"><button class="btn" id="shareClose">關閉</button></div>
+</dialog>
+
+<dialog id="mmDlg">
+  <div class="dlg-head">匯出 Google My Maps 檔案</div>
+  <div class="dlg-body">
+    <p style="font-size:12.5px;color:var(--ink-soft);line-height:1.8;margin-bottom:10px" id="mmStat"></p>
+    <div class="field"><label>城市（選填，協助「無座標」的點自動定位，例：London）</label>
+      <input id="mmCity" maxlength="30" placeholder="London"></div>
+    <p style="font-size:12px;color:var(--ink-soft);line-height:1.8">
+      <b>KML（推薦）</b>：只含有座標的點，名稱、依天分色、分組全部自動，匯入零設定。<br>
+      <b>CSV</b>：包含全部的點，無座標者由 My Maps 用名稱自動定位（連鎖店請務必驗證）；
+      匯入時位置欄選「<b>定位</b>」、名稱欄選「<b>名稱</b>」。</p>
+  </div>
+  <div class="dlg-foot">
+    <button class="btn" id="mmClose" style="margin-right:auto">關閉</button>
+    <button class="btn" id="mmCSV">下載 CSV</button>
+    <button class="btn primary" id="mmKML">下載 KML</button>
+  </div>
+</dialog>
+
+<dialog id="mapDlg" class="wide">
+  <div class="dlg-head" id="mapTitle">點位地圖</div>
+  <div class="dlg-body">
+    <div id="mapBox"></div>
+    <div id="mapMiss"></div>
+    <div id="mapHint">標記編號＝當日早→中→晚的排列順序，顏色＝事件類別。點標記可看名稱。</div>
+  </div>
+  <div class="dlg-foot">
+    <button class="btn" id="mapGoogle" style="margin-right:auto" title="改在 Google Maps 以路線方式開啟">在 Google Maps 開啟（含路線）</button>
+    <button class="btn" id="mapClose">關閉</button>
+  </div>
 </dialog>
 
 <dialog id="confirmDlg">
@@ -1203,6 +1248,84 @@ $("btnExport").addEventListener("click", ()=>{
   toast("已匯出，之後可用「匯入行程」整份還原");
 });
 
+/* ───────────────────── 匯出 My Maps ───────────────────── */
+const DAY_PALETTE = ["#C92A2A","#1971C2","#2F9E44","#9C36B5","#E8890C","#0C8599","#795548","#D6336C","#5F3DC4","#66A80F"];
+function dlFile(name, mime, content){
+  const a = document.createElement("a");
+  const url = URL.createObjectURL(new Blob([content], {type:mime}));
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
+function allEventRows(){   /* 依 天→時段→pool 順序列出全部事件 */
+  const rows = [];
+  state.days.forEach((day, i)=>SLOTS.forEach(sl=>day[sl].forEach(id=>{
+    rows.push({ev:events.get(id), day:i+1, slot:SLOT_INFO[sl].zh, coord:coordsFromUrl(events.get(id).g||"")});
+  })));
+  state.pool.forEach(id=>rows.push({ev:events.get(id), day:"", slot:"", coord:coordsFromUrl(events.get(id).g||"")}));
+  return rows;
+}
+$("btnMyMaps").addEventListener("click", ()=>{
+  flushSave();
+  const rows = allEventRows();
+  const withC = rows.filter(r=>r.coord).length;
+  $("mmStat").innerHTML = `共 <b>${rows.length}</b> 個事件，其中 <b>${withC}</b> 個有精準座標、<b>${rows.length-withC}</b> 個無座標。`;
+  $("mmDlg").showModal();
+});
+$("mmClose").addEventListener("click", ()=>$("mmDlg").close());
+function csvCell(v){ return '"' + String(v??"").replace(/"/g,'""') + '"'; }
+$("mmCSV").addEventListener("click", ()=>{
+  const city = $("mmCity").value.trim();
+  const rows = allEventRows();
+  const head = ["名稱","定位","天","時段","類別","區域","備註","定位方式"];
+  const body = rows.map(r=>{
+    const loc = r.coord || [r.ev.n, r.ev.a, city].filter(Boolean).join(" ");
+    return [r.ev.n, loc, r.day, r.slot, CATS[r.ev.c].label, r.ev.a, r.ev.m,
+      r.coord ? "精準座標" : "自動定位・請驗證"].map(csvCell).join(",");
+  });
+  dlFile(safeName(el.title.value) + "_MyMaps.csv", "text/csv;charset=utf-8",
+    "\ufeff" + head.map(csvCell).join(",") + "\r\n" + body.join("\r\n"));
+  toast("已下載 CSV，到 My Maps 匯入：位置欄選「定位」、名稱欄選「名稱」");
+});
+function xmlEsc(v){ return String(v??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function kmlColor(hex){ const h = hex.replace("#",""); return "ff" + h.slice(4,6) + h.slice(2,4) + h.slice(0,2); }
+$("mmKML").addEventListener("click", ()=>{
+  const rows = allEventRows().filter(r=>r.coord);
+  if(!rows.length){ toast("目前沒有任何卡片帶精準座標，請先在 Google Map 欄貼上完整網址"); return; }
+  const skipped = allEventRows().length - rows.length;
+  const title = xmlEsc(el.title.value.trim() || "我的行程");
+  let styles = "", folders = "";
+  const groups = new Map();   /* key: 天數字 或 "pool" */
+  rows.forEach(r=>{
+    const k = r.day || "pool";
+    if(!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(r);
+  });
+  const usedDays = [...groups.keys()].filter(k=>k!=="pool").sort((a,b)=>a-b);
+  usedDays.forEach(dn=>{
+    styles += `<Style id="d${dn}"><IconStyle><color>${kmlColor(DAY_PALETTE[(dn-1)%DAY_PALETTE.length])}</color><Icon><href>https://maps.google.com/mapfiles/kml/paddle/wht-blank.png</href></Icon></IconStyle></Style>`;
+  });
+  styles += `<Style id="dpool"><IconStyle><color>${kmlColor("#5C677D")}</color><Icon><href>https://maps.google.com/mapfiles/kml/paddle/wht-blank.png</href></Icon></IconStyle></Style>`;
+  const mkPm = (r, sid)=>{
+    const [la, ln] = r.coord.split(",");
+    const desc = [CATS[r.ev.c].label, r.ev.a, r.ev.m, r.slot ? "時段：" + r.slot : ""].filter(Boolean).join("｜");
+    return `<Placemark><name>${xmlEsc(r.ev.n)}</name><styleUrl>#${sid}</styleUrl>` +
+      (desc ? `<description>${xmlEsc(desc)}</description>` : "") +
+      `<Point><coordinates>${ln},${la},0</coordinates></Point></Placemark>`;
+  };
+  usedDays.forEach(dn=>{
+    const d = dateOf(dn-1);
+    folders += `<Folder><name>DAY ${dn}${d ? "（" + fmtDate(d) + "）" : ""}</name>` +
+      groups.get(dn).map(r=>mkPm(r, "d"+dn)).join("") + `</Folder>`;
+  });
+  if(groups.has("pool")){
+    folders += `<Folder><name>未排入</name>` + groups.get("pool").map(r=>mkPm(r, "dpool")).join("") + `</Folder>`;
+  }
+  const kml = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${title}</name>${styles}${folders}</Document></kml>`;
+  dlFile(safeName(el.title.value) + ".kml", "application/vnd.google-earth.kml+xml", kml);
+  toast(`已下載 KML（${rows.length} 個點${skipped ? "，略過 " + skipped + " 個無座標的點" : ""}）`);
+});
+
 /* ───────────────────── 當日地圖路線 ───────────────────── */
 function coordsFromUrl(u){
   if(!u) return null;
@@ -1218,12 +1341,14 @@ function waypointOf(id){
   const ev = events.get(id);
   return coordsFromUrl(ev.g) || [ev.n, ev.a].filter(Boolean).join(" ");
 }
-document.addEventListener("click", e=>{
-  const btn = e.target.closest(".dmap");
-  if(!btn) return;
-  const day = state.days[+btn.dataset.day];
-  let ids = [];
-  SLOTS.forEach(s=>ids.push(...day[s]));
+const CAT_COLOR = {dining:"#C92A2A", shop:"#1971C2", show:"#9C36B5", arch:"#795548", spot:"#2F9E44", sight:"#5C677D", basic:"#E8890C"};
+function dayIds(i){
+  const out = [];
+  SLOTS.forEach(s=>out.push(...state.days[i][s]));
+  return out;
+}
+function openDayInGoogle(i){
+  let ids = dayIds(i);
   if(!ids.length) return;
   if(ids.length === 1){
     window.open("https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(waypointOf(ids[0])), "_blank");
@@ -1239,7 +1364,55 @@ document.addEventListener("click", e=>{
     + "&destination=" + encodeURIComponent(pts[pts.length-1])
     + (pts.length > 2 ? "&waypoints=" + pts.slice(1,-1).map(encodeURIComponent).join("%7C") : "");
   window.open(url, "_blank");
+}
+let mapObj = null, mapDay = 0;
+function destroyMap(){ if(mapObj){ try{ mapObj.remove(); }catch(e){} mapObj = null; } }
+function openDayMap(i){
+  const ids = dayIds(i);
+  if(!ids.length) return;
+  if(typeof L === "undefined"){   /* 地圖元件載入失敗時退回 Google Maps */
+    toast("地圖元件載入失敗，改在 Google Maps 開啟");
+    openDayInGoogle(i);
+    return;
+  }
+  mapDay = i;
+  const pts = [], miss = [];
+  ids.forEach((id, k)=>{
+    const ev = events.get(id);
+    const c = coordsFromUrl(ev.g||"");
+    if(c){ const [la, ln] = c.split(","); pts.push({idx:k+1, la:+la, ln:+ln, ev}); }
+    else miss.push(`${k+1}. ${ev.n}`);
+  });
+  const d = dateOf(i);
+  $("mapTitle").textContent = `DAY ${i+1} 點位地圖${d ? "　" + fmtDate(d) : ""}（${pts.length}/${ids.length} 個可定位）`;
+  $("mapMiss").innerHTML = miss.length
+    ? `未能定位：${miss.map(esc).join("、")}<br>（雙擊卡片，在 Google Map 欄貼上「完整版」網址即可定位——電腦版地圖網址列複製的長網址，短網址不含座標）`
+    : "";
+  $("mapDlg").showModal();
+  destroyMap();
+  $("mapBox").innerHTML = "";
+  mapObj = L.map("mapBox");
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    {maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(mapObj);
+  const lls = [];
+  pts.forEach(p=>{
+    const mk = L.marker([p.la, p.ln], {icon: L.divIcon({className:"", iconSize:[26,26], iconAnchor:[13,13],
+      html:`<div class="mpin" style="background:${CAT_COLOR[p.ev.c]||"#5C677D"}">${p.idx}</div>`})}).addTo(mapObj);
+    mk.bindPopup(`<b>${p.idx}. ${esc(p.ev.n)}</b>${p.ev.a ? `<br>${esc(p.ev.a)}` : ""}`);
+    lls.push([p.la, p.ln]);
+  });
+  if(lls.length === 1) mapObj.setView(lls[0], 15);
+  else if(lls.length) mapObj.fitBounds(L.latLngBounds(lls).pad(0.2));
+  else mapObj.setView([20, 0], 2);
+  setTimeout(()=>{ try{ mapObj.invalidateSize(); }catch(e){} }, 80);
+}
+document.addEventListener("click", e=>{
+  const btn = e.target.closest(".dmap");
+  if(btn) openDayMap(+btn.dataset.day);
 });
+$("mapClose").addEventListener("click", ()=>{ destroyMap(); $("mapDlg").close(); });
+$("mapDlg").addEventListener("close", destroyMap);
+$("mapGoogle").addEventListener("click", ()=>openDayInGoogle(mapDay));
 
 /* ───────────────────── 列印 ───────────────────── */
 function pChip(id){
