@@ -107,6 +107,7 @@ header{
   background:var(--board);color:#fff;font-size:12px;padding:5px 11px;border-radius:6px;
   box-shadow:0 4px 14px rgba(0,0,0,.35);
 }
+[data-tip]{-webkit-touch-callout:none;user-select:none;touch-action:manipulation}
 
 /* ── 主體 ─────────────────────── */
 main{flex:1;display:flex;min-height:0}
@@ -603,13 +604,38 @@ document.addEventListener("mouseover", e=>{
 document.addEventListener("mouseout", e=>{
   if(e.target.closest("[data-tip]")) hideTip();
 });
-document.addEventListener("click", e=>{
+/* 觸控長按預覽：按住約 0.5 秒只顯示說明、不執行；快速點擊才執行 */
+let lpTimer = null, lpFired = false;
+document.addEventListener("pointerdown", e=>{
+  if(e.pointerType !== "touch") return;
   const b = e.target.closest("[data-tip]");
-  if(b){   /* 觸控：點擊時短暫顯示說明 */
+  if(!b) return;
+  lpFired = false;
+  clearTimeout(lpTimer);
+  lpTimer = setTimeout(()=>{
+    lpFired = true;
     showTip(b);
     clearTimeout(showTip._t);
-    showTip._t = setTimeout(hideTip, 1300);
+    showTip._t = setTimeout(hideTip, 1800);
+  }, 500);
+});
+["pointerup","pointercancel","pointerleave"].forEach(ev=>
+  document.addEventListener(ev, ()=>clearTimeout(lpTimer)));
+document.addEventListener("contextmenu", e=>{
+  if(e.target.closest("[data-tip]")) e.preventDefault();
+});
+document.addEventListener("click", e=>{
+  const b = e.target.closest("[data-tip]");
+  if(!b) return;
+  if(lpFired){                 /* 長按後放開：攔截補發的 click，不執行動作 */
+    lpFired = false;
+    e.preventDefault();
+    e.stopPropagation();
+    return;
   }
+  showTip(b);                  /* 快速點擊：執行動作＋短暫顯示說明 */
+  clearTimeout(showTip._t);
+  showTip._t = setTimeout(hideTip, 1300);
 }, true);
 
 /* ───────────────────── Undo / Redo ───────────────────── */
