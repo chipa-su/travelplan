@@ -430,8 +430,9 @@ dialog.wide{max-width:880px}
     <div class="field"><label>區域（選填）</label><input id="edArea" maxlength="30"></div>
     <div class="field"><label>備註（選填）</label><input id="edNote" maxlength="80"></div>
     <div class="field" id="fGmap"><label>Google Map 連結（選填）</label>
-      <input id="edGmap" maxlength="300" placeholder="https://maps.app.goo.gl/…">
+      <input id="edGmap" maxlength="300" placeholder="貼上完整網址可自動帶入名稱與區域">
       <span class="err">連結需以 http:// 或 https:// 開頭</span>
+      <span id="edGmapInfo" style="font-size:11px;color:var(--accent);line-height:1.5"></span>
     </div>
   </div>
   <div class="dlg-foot">
@@ -1091,11 +1092,83 @@ function openEvDlg(id){
   $("edName").value = ev.n; $("edCat").value = ev.c;
   $("edArea").value = ev.a||""; $("edNote").value = ev.m||""; $("edGmap").value = ev.g||"";
   $("fName").classList.remove("invalid"); $("fGmap").classList.remove("invalid");
+  $("edGmapInfo").textContent = "";
   $("edDup").style.display = id ? "" : "none";
   $("evDlg").showModal(); $("edName").focus();
 }
 $("btnAdd").addEventListener("click", ()=>openEvDlg(null));
 $("edCancel").addEventListener("click", ()=>{ editingId=null; $("evDlg").close(); });
+/* ── 貼上 Google Maps 長網址 → 自動帶入名稱／區域 ── */
+function gmapPlaceName(url){
+  const m = url.match(/\/maps\/place\/([^\/@?]+)/);
+  if(!m) return null;
+  let name;
+  try{ name = decodeURIComponent(m[1].replace(/\+/g," ")).trim(); }catch(e){ return null; }
+  if(!name || /^-?\d+[.°]/.test(name)) return null;   /* 丟釘選點會變座標字串，略過 */
+  return name;
+}
+let geoSeq = 0;
+async function gmapAutofill(){
+  const field = $("edGmap");
+  let v = field.value.trim();
+  if(!v) return;
+  /* 手機分享常是「名稱\n網址」混合文字：抽出網址，前面的文字當名稱候補 */
+  let prefixName = null;
+  const um = v.match(/https?:\/\/\S+/);
+  if(um && um[0] !== v){
+    prefixName = v.slice(0, um.index).replace(/[\s,，、:：]+$/,"").trim() || null;
+    v = um[0];
+    field.value = v;
+  }
+  if(!/google\.[a-z.]+\/maps|goo\.gl/.test(v)) return;
+  const info = [];
+  const name = gmapPlaceName(v) || prefixName;
+  if(name && !$("edName").value.trim()){
+    $("edName").value = name;
+    $("fName").classList.remove("invalid");
+    info.push("名稱");
+  }
+  const coord = coordsFromUrl(v);
+  if(!coord){
+    $("edGmapInfo").textContent = info.length
+      ? `已自動帶入：${info.join("、")}`
+      : "短網址不含地點資訊，貼「完整版」網址（電腦版網址列複製）可自動帶入名稱與區域";
+    return;
+  }
+  if($("edArea").value.trim()){
+    $("edGmapInfo").textContent = info.length ? `已自動帶入：${info.join("、")}` : "";
+    return;
+  }
+  /* 反向地理編碼查區域（OpenStreetMap Nominatim，免金鑰） */
+  const mySeq = ++geoSeq;
+  $("edGmapInfo").textContent = (info.length ? `已自動帶入：${info.join("、")}；` : "") + "正在查詢區域…";
+  try{
+    const [la, ln] = coord.split(",");
+    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${la}&lon=${ln}&zoom=16&accept-language=zh-TW,zh,en`);
+    const d = await res.json();
+    if(mySeq !== geoSeq) return;   /* 使用者又貼了新網址，放棄舊查詢 */
+    const a = d.address || {};
+    const area = a.neighbourhood || a.suburb || a.quarter || a.city_district || a.borough || a.town || a.village || a.city || "";
+    if(area && !$("edArea").value.trim()){
+      $("edArea").value = area;
+      info.push("區域");
+    }
+    $("edGmapInfo").textContent = info.length ? `已自動帶入：${info.join("、")}（可自行修改）` : "";
+  }catch(e){
+    if(mySeq === geoSeq)
+      $("edGmapInfo").textContent = (info.length ? `已自動帶入：${info.join("、")}；` : "") + "區域查詢失敗（離線或服務忙碌），可手動填寫";
+  }
+}
+let gmapLast = "";
+$("edGmap").addEventListener("input", ()=>{
+  const v = $("edGmap").value;
+  if(v === gmapLast) return;
+  /* 只在看起來是一次性貼上（長度跳增）時觸發，避免逐字輸入頻繁查詢 */
+  if(v.length - gmapLast.length > 10 || v.includes("\n")){ gmapLast = v; gmapAutofill(); }
+  else gmapLast = v;
+});
+$("edGmap").addEventListener("change", ()=>{ gmapLast = $("edGmap").value; gmapAutofill(); });
+
 function collectForm(){
   const n = $("edName").value.trim();
   const g = $("edGmap").value.trim();
